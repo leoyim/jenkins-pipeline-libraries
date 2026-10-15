@@ -1,0 +1,83 @@
+#!/usr/bin/env groovy
+// ============================================================================
+// 模拟发版构建与部署 —— 全量显式调用示例（脚本化 Pipeline）
+//
+// 特点：每个阶段显式调用共享库函数，便于按需裁剪；默认 SIMULATE=true，
+//       构建/镜像/部署/验证全部走安全模拟路径，任何 Jenkins 环境可直接运行。
+//
+// 前置条件：
+//   1) Manage Jenkins -> System -> Global Trusted Pipeline Libraries 配置：
+//      Name: jenkins-share-lib  Default version: master  (SCM 指向本仓库)
+//   2) 一个带任意 Jenkinsfile 的业务仓库（本文件放入业务仓库根目录）。
+// ============================================================================
+
+@Library('jenkins-share-lib') _
+
+properties([
+    parameters([
+        string(name: 'VERSION', defaultValue: '', description: '版本号，留空自动取 git commit'),
+        choice(name: 'TARGET_ENV', choices: ['staging', 'prod'], description: '目标环境'),
+        booleanParam(name: 'SIMULATE', defaultValue: true, description: '模拟模式：全部步骤安全模拟（演示/联调用）'),
+        booleanParam(name: 'FORCE_FAIL', defaultValue: false, description: '故意让构建失败，用于演示异常清洗与状态同步'),
+    ]),
+    disableConcurrentBuilds(),
+    buildDiscarder(logRotator(numToKeepStr: '30')),
+])
+
+node {
+    try {
+        // ---- 初始化：状态重置 + 展示信息 + 运行摘要 ----------------------
+        ciInit([
+            app     : 'order-api',
+            env     : params.TARGET_ENV,
+            version : params.VERSION ?: null,
+            simulate: params.SIMULATE,
+            // color : 'true',        // 安装了 AnsiColor 插件时可打开彩色日志
+        ])
+
+        // ---- 阶段 1：拉取源码 -------------------------------------------
+        ciStage('拉取源码') {
+            checkout scm
+            ciLog.info("commit: ${env.GIT_COMMIT?.take(7) ?: '-'}  branch: ${env.GIT_BRANCH ?: '-'}")
+        }
+
+        // ---- 阶段 2：编译构建（超时 30 分钟）----------------------------
+        ciStage('编译构建', timeoutMinutes: 30) {
+            if (params.FORCE_FAIL) {
+                ciLog.warn('FORCE_FAIL=true，注入失败以演示异常清洗')
+                sh 'exit 42'
+            }
+            // 真实构建改为：ciBuild(tool: 'maven', goals: 'clean verify')
+            ciBuild(tool: 'mock', goals: 'clean package')
+        }
+
+        // ---- 阶段 3：镜像构建 -------------------------------------------
+        ciStage('镜像构建') {
+            // 真实构建推送改为：ciDockerBuild(registry: 'harbor.example.com', push: true)
+            ciDockerBuild(registry: 'registry.internal')
+        }
+
+        // ---- 阶段 4：部署发布（prod 时人工确认闸门）---------------------
+        ciStage('部署发布', timeoutMinutes: 10) {
+            ciDeploy(
+                target  : params.TARGET_ENV,
+                replicas: params.TARGET_ENV == 'prod' ? 3 : 2,
+                gate    : params.TARGET_ENV == 'prod' ? 'manual' : 'none',
+                // 真实部署改为：mode: 'k8s', namespace: 'prod'
+            )
+        }
+
+        // ---- 阶段 5：部署验证 -------------------------------------------
+        ciStage('部署验证') {
+            ciVerify(attempts: 3)
+        }
+    } catch (Exception e) {
+        // ciStage/ciTry 已输出清洗后的错误，这里只补充一句定位提示
+        ciLog.error('流水线失败，请依据上方「原因/建议/堆栈摘要」定位')
+        throw e
+    } finally {
+        // ---- 状态同步 + 汇总 + 通知（无论成败都会执行）------------------
+        ciReport()
+        ciNotify()
+    }
+}

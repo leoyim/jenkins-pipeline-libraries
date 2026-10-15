@@ -1,0 +1,28 @@
+// ============================================================================
+// 极简示例：一行调用完成 拉取源码 -> 编译构建 -> 镜像构建 -> 部署发布
+//          -> 部署验证 -> 汇总 -> 通知（默认全模拟，任何环境可直接运行）
+// ============================================================================
+
+@Library('jenkins-share-lib') _
+
+node {
+    ciPipeline(
+        app     : 'order-api',
+        env     : 'staging',
+        simulate: true,
+        deploy  : [replicas: 2],
+    )
+}
+
+// 真实发版等价写法：
+// node {
+//     ciPipeline(
+//         app     : 'order-api',
+//         env     : 'prod',
+//         simulate: false,
+//         build   : [tool: 'maven', goals: 'clean verify'],
+//         docker  : [registry: 'harbor.example.com', push: true],
+//         deploy  : [mode: 'k8s', namespace: 'prod', gate: 'manual'],
+//         notify  : [channel: 'webhook', webhook: 'https://qyapi.weixin.qq.com/...'],
+//     )
+// }

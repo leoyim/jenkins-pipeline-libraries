@@ -1,0 +1,79 @@
+// ============================================================================
+// 声明式 Pipeline 集成示例：declarative 骨架 + 共享库函数
+// 适合已有声明式规范、只想把"能力"交给共享库的团队。
+// ============================================================================
+
+@Library('jenkins-share-lib') _
+
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    parameters {
+        string(name: 'VERSION', defaultValue: '', description: '版本号，留空自动取 git commit')
+        choice(name: 'TARGET_ENV', choices: ['staging', 'prod'], description: '目标环境')
+        booleanParam(name: 'SIMULATE', defaultValue: true, description: '模拟模式')
+    }
+
+    stages {
+        stage('初始化') {
+            steps {
+                script {
+                    ciInit([
+                        app     : 'order-api',
+                        env     : params.TARGET_ENV,
+                        version : params.VERSION ?: null,
+                        simulate: params.SIMULATE,
+                    ])
+                }
+            }
+        }
+        stage('拉取源码') {
+            steps {
+                checkout scm
+            }
+        }
+        stage('编译构建') {
+            steps {
+                script { ciBuild(tool: 'mock') }   // 真实构建: tool:'maven', goals:'clean verify'
+            }
+        }
+        stage('镜像构建') {
+            steps {
+                script { ciDockerBuild(registry: 'registry.internal') }
+            }
+        }
+        stage('部署发布') {
+            steps {
+                script {
+                    ciDeploy(
+                        target  : params.TARGET_ENV,
+                        replicas: params.TARGET_ENV == 'prod' ? 3 : 2,
+                        gate    : params.TARGET_ENV == 'prod' ? 'manual' : 'none',
+                    )
+                }
+            }
+        }
+        stage('部署验证') {
+            steps {
+                script { ciVerify(attempts: 3) }
+            }
+        }
+    }
+
+    post {
+        always {
+            // 状态同步 + 阶段台账汇总（失败时同样执行）
+            ciReport()
+            ciNotify()
+        }
+        aborted {
+            ciLog.warn('流水线被中止（手动停止或超时）')
+        }
+    }
+}
