@@ -1,4 +1,4 @@
-# jenkins-share-lib — 企业级 Jenkins 共享库
+# jenkins-pipeline-libraries — 企业级 Jenkins 共享库
 
 面向企业级持续集成/发版活动的共享库：**业务方不需要从 0 编写脚本**，大部分活动通过库中函数完成，
 同时保证 **日志醒目、异常清洗、状态同步正确、方法易用**。
